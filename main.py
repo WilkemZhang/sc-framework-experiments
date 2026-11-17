@@ -1,4 +1,4 @@
-"""在 PyCharm 里运行此文件，重做第 7 节实验并生成图表。"""
+"""Run this file in PyCharm to reproduce the Section 7 experiments and outputs."""
 from pathlib import Path
 import subprocess
 import sys
