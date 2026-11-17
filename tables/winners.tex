@@ -1,0 +1,42 @@
+\begin{table}[H]
+\centering\small
+\caption{Fastest method (median iteration count).}
+\label{tab:winners}
+\footnotesize
+\setlength{\tabcolsep}{3.2pt}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+$\kappa_f$ & $\varepsilon$ & Ridge & Asymmetric squared loss & Binary logistic & Log-sum-exp \\
+\midrule
+2 & $10^{-8}$ & NAG-SC (9) & NAG-SC (9) & NAG-SC (7) & NAG-SC (9) \\
+ & $10^{-12}$ & NAG-SC (13) & NAG-SC (13) & NAG-SC (11) & NAG-SC (13) \\
+ & $10^{-15}$ & NAG-SC (16) & NAG-SC (16) & NAG-SC (13) & NAG-SC (15) \\
+\addlinespace[2pt]
+10 & $10^{-8}$ & NAG-SC (29) & CC-FG (21) & CC-FG (15) & CC-FG (14) \\
+ & $10^{-12}$ & NAG-SC (42) & CC-FG (27) & CC-FG (25) & CC-FG (24) \\
+ & $10^{-15}$ & NAG-SC (51) & CC-FG (43) & CC-FG (32) & CC-FG (30) \\
+\addlinespace[2pt]
+$10^{2}$ & $10^{-8}$ & NAG-SC (105) & CC-FG (35) & CC-FG (23) & CC-FG (23) \\
+ & $10^{-12}$ & CC-FG/NAG-SC (152) & CC-FG (43) & CC-FG (33) & CC-FG (32) \\
+ & $10^{-15}$ & NAG-SC (186) & CC-FG (56) & CC-FG (46) & CC-FG (40) \\
+\addlinespace[2pt]
+$10^{3}$ & $10^{-8}$ & VC-FG (338) & CC-FG (58) & CC-FG (25) & CC-FG (38) \\
+ & $10^{-12}$ & NAG-SC (499) & CC-FG (63) & CC-FG (37) & CC-FG (66) \\
+ & $10^{-15}$ & NAG-SC (612) & CC-FG (93) & CC-FG (53) & CC-FG (89) \\
+\addlinespace[2pt]
+$10^{4}$ & $10^{-8}$ & VC-FG (1,064) & CC-FG (79) & CC-FG (26) & CC-FG (49) \\
+ & $10^{-12}$ & CC-FG (1,363) & CC-FG (124) & CC-FG (38) & CC-FG (67) \\
+ & $10^{-15}$ & CC-FG (1,709) & CC-FG (180) & CC-FG (55) & CC-FG (95) \\
+\addlinespace[2pt]
+$10^{5}$ & $10^{-8}$ & NAG-SC (3,508) & CC-FG (68) & CC-FG (26) & CC-FG (46) \\
+ & $10^{-12}$ & VC-FG (3,668) & CC-FG (124) & CC-FG (40) & CC-FG (67) \\
+ & $10^{-15}$ & VC-FG (5,365) & CC-FG (194) & CC-FG (58) & CC-FG (93) \\
+\addlinespace[2pt]
+$10^{6}$ & $10^{-8}$ & NAG-SC (11,109) & CC-FG (86) & CC-FG (26) & CC-FG (47) \\
+ & $10^{-12}$ & VC-FG (11,224) & CC-FG (152) & CC-FG (38) & CC-FG (67) \\
+ & $10^{-15}$ & VC-FG (14,254) & CC-FG (418) & CC-FG (55) & CC-FG (93) \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\begin{minipage}{.79\linewidth}\footnotesize Parentheses give the median first iteration $k$ at which both relative errors in~\eqref{eq:num-relative-errors} meet $\varepsilon$ in the same iterate, over five runs. All methods tied for the smallest finite median are listed. NAG-SC is the oracle baseline supplied with the global bounds.\end{minipage}
+\end{table}
