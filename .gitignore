@@ -20,4 +20,4 @@ Thumbs.db
 *.fdb_latexmk
 *.synctex.gz
 
-# Saved experimental results, tables, and figures are intentionally tracked.
+# Saved experimental results and figures are intentionally tracked.
