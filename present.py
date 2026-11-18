@@ -1,4 +1,4 @@
-"""Rebuild the table, eight individual plots, four pairs, and the shared-legend grid."""
+"""Rebuild iteration tables, convergence plots, and conditioning comparisons."""
 import csv
 import math
 from pathlib import Path
@@ -229,9 +229,62 @@ def write_figures(history, groups):
     plt.close(grid)
 
 
+def write_median_iterations(groups):
+    """Plot five-draw median joint crossing indices and interquartile ranges."""
+    out = ROOT / "figures"
+    out.mkdir(exist_ok=True)
+    kappas = np.asarray(KAPPAS)
+    titles = ("Ridge regression", "Asymmetric squared loss",
+              "Binary logistic regression", "Log-sum-exp")
+    with plt.rc_context({"font.family": "DejaVu Sans", "font.size": 10,
+                         "mathtext.fontset": "stix", "axes.spines.top": False,
+                         "axes.spines.right": False, "axes.linewidth": .65,
+                         "pdf.fonttype": 42}):
+        fig, axes = plt.subplots(2, 2, figsize=(8.0, 6.2))
+        for ax, family, title in zip(axes.flat, NAMES, titles):
+            for method, (label, color, style) in METHODS.items():
+                crossings = np.asarray([
+                    [groups[family, kappa, method, 15][replicate][2]
+                     for replicate in range(5)] for kappa in KAPPAS
+                ])
+                lower, medians, upper = np.quantile(
+                    crossings, [.25, .5, .75], axis=1, method="linear"
+                )
+                ax.fill_between(kappas, lower, upper, color=color,
+                                alpha=.10, linewidth=0, zorder=1)
+                ax.loglog(kappas, medians, color=color, ls=style,
+                          lw=1.05, marker="o", markersize=3.3, label=label,
+                          zorder=4 if method in ("fg_original", "widecap") else 2)
+            ax.set_title(title, fontsize=11.5, pad=8)
+            ax.set_xlabel(r"Prescribed condition ratio $L/\mu$", fontsize=10.5)
+            ax.set_ylabel("Accepted iterations", fontsize=10.5)
+            ax.set_xticks([2, 100, 10000, 1000000],
+                          ["2", r"$10^2$", r"$10^4$", r"$10^6$"])
+            ax.grid(axis="y", which="major", color="#dddddd", lw=.6)
+            ax.tick_params(labelsize=9.5, length=3, width=.65)
+            ax.margins(x=.02, y=.06)
+            ax.set_ylim(bottom=10.0**math.floor(math.log10(ax.dataLim.ymin)))
+        fig.suptitle("Median iterations to reach both relative errors "
+                     r"$\leq 10^{-15}$", y=.983, fontsize=12, fontweight="bold")
+        fig.text(.5, .938,
+                 "Lines: medians. Shading: interquartile range across five matched "
+                 "draws; not confidence intervals.",
+                 ha="center", fontsize=9.5, color="#444444")
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False,
+                   fontsize=9.5, bbox_to_anchor=(.52, .012), columnspacing=1.5,
+                   handlelength=2.3)
+        fig.subplots_adjust(left=.105, right=.985, bottom=.185, top=.85,
+                            wspace=.35, hspace=.60)
+        for ext in ("pdf", "png"):
+            fig.savefig(out / f"median_iterations_1e-15.{ext}", dpi=180)
+        plt.close(fig)
+
+
 
 if __name__ == "__main__":
     groups = read_iterations()
     write_tables(groups)
     with np.load(ROOT / "results/curves.npz") as history:
         write_figures(history, groups)
+    write_median_iterations(groups)

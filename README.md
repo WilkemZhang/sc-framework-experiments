@@ -55,6 +55,7 @@ This reads `results/runs.csv` and `results/curves.npz`, checks that the displaye
 trajectories agree with the recorded threshold crossings, and regenerates:
 
 - One eight-panel figure: `figures/all_families_grid.pdf` and `.png`.
+- One four-panel conditioning comparison: `figures/median_iterations_1e-15.pdf` and `.png`.
 - Four paired figures: `figures/*_pair.pdf` and `.png`.
 - Eight individual figures: `figures/single/*.pdf` and `.png`.
 - `tables/winners.tex`, `tables/winners.csv`, and `tables/median_iterations.csv`.
@@ -129,6 +130,11 @@ whose longest trajectory exceeds twice the second longest, both panels are
 cropped at 105% of the second-longest stopping index, rounded up. Cropping
 affects only the figures. The tables use complete runs and take the median of
 the five first-hit iteration counts for each method before selecting winners.
+
+The conditioning comparison shows the median accepted iteration count to
+reach both errors at `1e-15` in the same iterate. Shaded bands span the first
+and third quartiles over the five matched draws; they are not confidence
+intervals. Both axes use logarithmic scales, and all counts use complete runs.
 
 Saved results are included so the supplied figures can be reproduced without
 rerunning the solvers. Last digits and very tight threshold-crossing indices
