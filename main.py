@@ -1,136 +1,181 @@
-"""Compute the experiments, save the raw results, and draw the two figures."""
-import argparse
+"""Run the SC Framework experiments or redraw figures from saved results."""
+
 import csv
-from concurrent.futures import ProcessPoolExecutor
+import json
+import math
+import os
+import platform
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
+# Set numerical-library thread limits before importing NumPy and SciPy.
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
+import matplotlib
+matplotlib.use("Agg")
 import numpy as np
-from threadpoolctl import threadpool_limits
+import scipy
 
-from problems import FAMILIES, KAPPAS, Problem
+from problems import EXPONENTS, FAMILIES, KAPPAS, NUMBER_OF_DRAWS, Problem
 from solvers import METHODS, run_solver
+from plot_convergence import plot_convergence
+from plot_iterations_by_kappa import plot_iterations_by_kappa
 
 
-# Experiment settings.
-ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "results"
-REPLICATES = range(5)
-EXPONENTS = (8, 12, 15)
-TARGETS = tuple(10.0 ** -power for power in EXPONENTS)
+MODE = "full"                         # "full" or "reference"
+OUTPUT_FOLDER = Path("output") / MODE
+SAVED_COUNTS = Path("reference_runs.csv")  # Used only in reference mode
 MAX_STEPS = 150_000
 
 
-# 1. Compute the experiment results.
-def run_base(job):
-    """Reuse one sampled instance across all condition numbers and methods."""
-    family, replicate = job
-    rows, instances = [], []
-    references, curves = {}, {}
-    with threadpool_limits(1):
-        problem = Problem(family, replicate)
-        for kappa in KAPPAS:
-            problem.set_kappa(kappa)
-            xref, gref, gap0, d0 = problem.reference()
+def measure_method(problem, method, reference, keep_trajectory):
+    """Record the first accepted iterate meeting each error target."""
+    xref, _, gap0 = reference
+    distance0 = np.linalg.norm(problem.x0 - xref)
+    record = {"method": method, "rf": 1.0, "rd": 1.0}
+    for exponent in EXPONENTS:
+        for name in ("kf", "kd", "kjoint"):
+            record[f"{name}_{exponent}"] = math.inf
+    trajectory = []
 
-            instance = dict(family=family, replicate=replicate, kappa=kappa)
-            instances.append(dict(
-                **instance, n=problem.n, features=problem.p, dimension=problem.dim,
-                C=problem.C, lam=getattr(problem, "lam", None), mu=problem.mu, L=problem.L,
-            ))
-            references[f"{family}__{replicate}__{kappa}"] = xref
-            display = replicate == 0 and kappa == 1_000_000
-            for method in METHODS:
-                trace = []
-                first_k = {metric: [] for metric in ("f", "d", "joint")}
-                rf, rd = 1.0, 1.0
+    def record_errors(k, x):
+        if k == 0:
+            objective_error = distance_error = 1.0
+        else:
+            gap = problem.bregman(x, xref)
+            objective_error = gap / gap0
+            distance_error = (np.linalg.norm(x - xref) / distance0 )**2
+        record["rf"], record["rd"] = objective_error, distance_error
+        if keep_trajectory:
+            trajectory.append((k, objective_error, distance_error))
+        for exponent in EXPONENTS:
+            target = 10.0**-exponent
+            errors = (objective_error, distance_error,
+                      max(objective_error, distance_error))
+            for name, error in zip(("kf", "kd", "kjoint"), errors):
+                key = f"{name}_{exponent}"
+                if error <= target and record[key] == math.inf:
+                    record[key] = k
+        return max(objective_error, distance_error) <= 10.0**-EXPONENTS[-1]
 
-                def monitor(k, x):
-                    """Record errors at an accepted iterate; stop on the joint target."""
-                    nonlocal rf, rd
-                    if k:
-                        diff = x - xref
-                        # Compute f(x)-f(xref) without direct subtraction.
-                        delta = problem.bregman(x, xref) + gref @ diff
-                        rf = delta/gap0
-                        rd = (np.linalg.norm(diff)/d0)**2
-                    if display:
-                        trace.append((k, rf, rd))
-                    for metric, value in (("f", rf), ("d", rd), ("joint", max(rf, rd))):
-                        hits = first_k[metric]
-                        while len(hits) < len(TARGETS) and value <= TARGETS[len(hits)]:
-                            hits.append(k)
-                    return len(first_k["joint"]) == len(TARGETS)
-
-                result = run_solver(method, problem.oracle, problem.x0, problem.mu,
-                                    problem.L, MAX_STEPS, bregman=problem.bregman,
-                                    monitor=monitor)
-                row = dict(**instance, method=method, status=result["status"],
-                           iterations=result["iterations"], rf=rf, rd=rd)
-                for i, exponent in enumerate(EXPONENTS):
-                    for metric, hits in first_k.items():
-                        row[f"k{metric}_{exponent}"] = hits[i] if i < len(hits) else None
-                rows.append(row)
-                if display:
-                    curves[f"{family}__{method}"] = np.asarray(trace)
-        print(f"Completed {family}, instance {replicate+1}/{len(REPLICATES)}", flush=True)
-    return rows, instances, references, curves
+    result = run_solver(method, problem.oracle, problem.x0, problem.mu, problem.L,
+                        MAX_STEPS, bregman=problem.bregman, monitor=record_errors)
+    record.update(status=result["status"], iterations=result["iterations"])
+    return record, np.asarray(trajectory)
 
 
-def run_experiments(workers):
-    """Collect the results for every problem family and replicate."""
-    jobs = [(family, replicate) for replicate in REPLICATES for family in FAMILIES]
-    if workers == 1:
-        return list(map(run_base, jobs))
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(run_base, jobs))
-
-
-# 2. Save the raw results.
 def save_csv(path, rows):
-    with path.open("w", newline="") as out:
-        writer = csv.DictWriter(out, fieldnames=rows[0])
+    """An empty crossing cell means the target was not reached."""
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows({key: "" if value == math.inf else value
+                         for key, value in row.items()} for row in rows)
 
 
-def save_results(records):
-    """Save runs, instance parameters, reference points, and convergence histories."""
-    rows, instances = [], []
-    references, curves = {}, {}
-    for run_rows, instance_rows, reference_points, histories in records:
-        rows.extend(run_rows)
-        instances.extend(instance_rows)
-        references.update(reference_points)
-        curves.update(histories)
+def run_experiments():
+    """Run the same data and starting point for every method and condition ratio."""
+    rows, instances, references, trajectories = [], [], {}, {}
+    for replicate in range(NUMBER_OF_DRAWS):
+        for family in FAMILIES:
+            problem = Problem(family, replicate)
+            for kappa in KAPPAS:
+                problem.set_kappa(kappa)
+                reference = problem.reference()
+                xref, _, gap0 = reference
+                distance0 = np.linalg.norm(problem.x0 - xref)
+                instances.append(dict(
+                    family=family, replicate=replicate, kappa=kappa,
+                    n=problem.n, features=problem.p, dimension=problem.dim,
+                    C=problem.C, lam=getattr(problem, "lam", None),
+                    mu=problem.mu, L=problem.L,
+                    value_at_ref=problem.oracle(xref)[0],
+                    initial_gap_to_ref=gap0, initial_distance_to_ref=distance0))
+                references[f"{family}__{replicate}__{kappa}"] = xref
+                keep_trajectory = replicate == 0 and kappa == 1_000_000
+                for method in METHODS:
+                    record, trajectory = measure_method(problem, method, reference,
+                                                        keep_trajectory)
+                    rows.append(dict(family=family, replicate=replicate, kappa=kappa,
+                                     **record))
+                    if keep_trajectory:
+                        trajectories[f"{family}__{method}"] = trajectory
+            print(f"Finished {family}, draw {replicate + 1}/{NUMBER_OF_DRAWS}", flush=True)
 
-    OUT.mkdir(exist_ok=True)
-    save_csv(OUT / "runs.csv", rows)
-    save_csv(OUT / "instances.csv", instances)
-    np.savez_compressed(OUT / "references.npz", **references)
-    np.savez_compressed(OUT / "curves.npz", **curves)
+    results = OUTPUT_FOLDER / "results"
+    results.mkdir(parents=True, exist_ok=True)
+    save_csv(results / "runs.csv", rows)
+    save_csv(results / "instances.csv", instances)
+    np.savez_compressed(results / "references.npz", **references)
+    np.savez_compressed(results / "curves.npz", **trajectories)
+    return rows, trajectories
 
 
-# 3. Draw the two figures from the saved data.
-def make_figures():
-    from plot_convergence import plot_convergence
-    from plot_iterations_by_kappa import plot_iterations_by_kappa
-
-    plot_convergence()
-    plot_iterations_by_kappa()
+def read_saved_counts(path):
+    """Read saved iteration counts for the median iteration figures."""
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    for row in rows:
+        for name in ("replicate", "kappa", "iterations"):
+            row[name] = int(row[name])
+        for exponent in EXPONENTS:
+            for name in ("kf", "kd", "kjoint"):
+                key = f"{name}_{exponent}"
+                row[key] = int(row[key]) if row[key] else math.inf
+    return rows
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("all", "run", "plot"), default="all",
-                        help="Run experiments, plot saved results, or do both (default).")
-    parser.add_argument("--workers", type=int, default=4,
-                        help="Number of independent experiment workers; use 1 for serial execution.")
-    args = parser.parse_args()
-    if args.mode in ("all", "run"):
-        records = run_experiments(args.workers)
-        save_results(records)
-    if args.mode in ("all", "plot"):
-        make_figures()
+    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+    figures = OUTPUT_FOLDER / "figures"
+    figures.mkdir(exist_ok=True)
+
+    figure_names = []
+    if MODE == "full":
+        rows, trajectories = run_experiments()
+        plot_convergence(trajectories, figures)
+        figure_names.append("all_families_grid")
+    else:
+        rows = read_saved_counts(SAVED_COUNTS)
+        (OUTPUT_FOLDER / "results").mkdir(exist_ok=True)
+        save_csv(OUTPUT_FOLDER / "results" / "runs.csv", rows)
+
+        curves_file = SAVED_COUNTS.with_name("curves.npz")
+        if curves_file.is_file():
+            with np.load(curves_file) as trajectories:
+                plot_convergence(trajectories, figures)
+            figure_names.append("all_families_grid")
+
+    for exponent in EXPONENTS:
+        plot_iterations_by_kappa(rows, exponent, figures)
+        figure_names.append(f"median_iterations_1e-{exponent}")
+
+    # Save a short record of the environment used for this execution.
+    environment = {"mode": MODE, "python": platform.python_version(),
+                   "platform": platform.platform(), "numpy": np.__version__,
+                   "scipy": scipy.__version__, "matplotlib": matplotlib.__version__,
+                   "workers": 1, "draws": NUMBER_OF_DRAWS, "max_steps": MAX_STEPS,
+                   "condition_ratios": KAPPAS, "targets": [10.0**-p for p in EXPONENTS],
+                   "saved_counts": str(SAVED_COUNTS) if MODE == "reference" else None}
+    (OUTPUT_FOLDER / "environment.json").write_text(
+        json.dumps(environment, indent=2) + "\n", encoding="utf-8")
+    print(f"Finished. Results and figures are in {OUTPUT_FOLDER.resolve()}")
+
+    archive = Path("sc_framework_outputs.zip")
+    data_files = ["runs.csv"]
+    if MODE == "full":
+        data_files.extend(["instances.csv", "references.npz", "curves.npz"])
+
+    with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
+        bundle.write(OUTPUT_FOLDER / "environment.json", "environment.json")
+        for name in data_files:
+            bundle.write(OUTPUT_FOLDER / "results" / name, f"results/{name}")
+        for name in figure_names:
+            for ext in ("pdf", "png"):
+                bundle.write(figures / f"{name}.{ext}", f"figures/{name}.{ext}")
+    print(f"Results archive: {archive.resolve()}")
 
 
 if __name__ == "__main__":
